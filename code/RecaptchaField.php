@@ -80,7 +80,7 @@ class RecaptchaField extends SpamProtectorField {
 	 *
 	 * @var string
 	 */
-	public static $api_verify_server = 'www.google.com/recaptcha/api/verify';
+	public static $api_verify_server = 'www.google.com/recaptcha/api/siteverify';
 	
 	/**
 	 * Javascript-address which includes necessary logic from the recaptcha-server.
@@ -153,18 +153,18 @@ class RecaptchaField extends SpamProtectorField {
 		Session::clear("FormField.{$this->form->FormName()}.{$this->Name()}.error");
 
 		// iframe (fallback)
-		$iframeURL = ($this->useSSL) ? 'https://' : 'http://';
+		$iframeURL = ($this->useSSL) ? 'https://' : 'https://';
 		$iframeURL .= sprintf(self::$recaptcha_noscript_url, self::$public_api_key);
 		if(!empty($previousError)) $iframeURL .= "&error={$previousError}";
 		
 		// js (main logic)
-		$jsURL = ($this->useSSL) ? 'https://' : 'http://';
+		$jsURL = ($this->useSSL) ? 'https://' : 'https://';
 		$jsURL .= sprintf(self::$recaptcha_js_url, self::$public_api_key);
 		if(!empty($previousError)) $jsURL .= "&error={$previousError}";
 	
 		
 		if($this->useAjaxAPI) {
-			$ajaxURL = ($this->useSSL) ? 'https://' : 'http://';
+			$ajaxURL = ($this->useSSL) ? 'https://' : 'https://';
 			$ajaxURL .= self::$recaptcha_ajax_url;
 			Requirements::javascript($ajaxURL);
 			$html .= '
@@ -179,8 +179,8 @@ class RecaptchaField extends SpamProtectorField {
 			';
 		} else {
 			$html .= '
-				<script type="text/javascript" src="' . $jsURL . '">
-				</script>
+				<script src=\'https://www.google.com/recaptcha/api.js\'></script>
+				<div class="g-recaptcha" data-sitekey="' . self::$public_api_key . '"></div>
 			';
 		}
 		
@@ -241,16 +241,13 @@ HTML;
 	public function validate($validator) {
 		// don't bother querying the recaptcha-service if fields were empty
 		if(
-			!isset($_REQUEST['recaptcha_challenge_field']) 
-			|| empty($_REQUEST['recaptcha_challenge_field'])
-			|| !isset($_REQUEST['recaptcha_response_field']) 
-			|| empty($_REQUEST['recaptcha_response_field'])
+			!isset($_REQUEST['g-recaptcha-response'])
 		) {
 			$validator->validationError(
 				$this->name, 
 				_t(
 					'RecaptchaField.EMPTY', 
-					"Please answer the captcha question",
+					"Please complete the captcha",
 					PR_MEDIUM,
 					"Recaptcha (http://recaptcha.net) provides two words in an image, and expects a user to type them in a textfield"
 				), 
@@ -261,8 +258,8 @@ HTML;
 			return false;
 		}
 
-		$response = $this->recaptchaHTTPPost($_REQUEST['recaptcha_challenge_field'], $_REQUEST['recaptcha_response_field']);
-		if(!$response) {
+		$response = json_decode($this->recaptchaHTTPPost($_REQUEST['g-recaptcha-response']), true);
+		if(!$response['success']) {
 			$validator->validationError(
 				$this->name, 
 				_t(
@@ -277,34 +274,6 @@ HTML;
 			return false;			
 		}
 		
-		// get the payload of the response and split it by newlines
-		list($isValid, $error) = explode("\n", $response, 2);
-
-		if($isValid != 'true') {
-			// Count some errors as "user level", meaning they raise a validation error rather than a system error
-			$userLevelErrors = array('incorrect-captcha-sol', 'invalid-request-cookie');
-			if(!in_array(trim($error), $userLevelErrors)) {
-				user_error("RecatpchaField::validate(): Recaptcha-service error: '{$error}'", E_USER_ERROR);
-				return false;
-			} else {
-				// Internal error-string returned by recaptcha, e.g. "incorrect-captcha-sol". 
-				// Used to generate the new iframe-url/js-url after form-refresh.
-				Session::set("FormField.{$this->form->FormName()}.{$this->Name()}.error", trim($error)); 
-				$validator->validationError(
-					$this->name, 
-					_t(
-						'RecaptchaField.VALIDSOLUTION', 
-						"Your answer didn't match the captcha words, please try again",
-						PR_MEDIUM,
-						"Recaptcha (http://recaptcha.net) provides two words in an image, and expects a user to type them in a textfield"
-					), 
-					"validation", 
-					false
-				);
-				return false;
-			}
-		}
-		
 		return true;
 	}
 	
@@ -316,15 +285,14 @@ HTML;
 	 * @param string $responseStr
 	 * @return string Raw HTTP-response
 	 */
-	protected function recaptchaHTTPPost($challengeStr, $responseStr) {
+	protected function recaptchaHTTPPost($responseStr) {
 		$postVars = array(
-			'privatekey' => self::$private_api_key,
+			'secret' => self::$private_api_key,
 			'remoteip' => $_SERVER["REMOTE_ADDR"],
-			'challenge' => $challengeStr,
 			'response' => $responseStr,
 		);
 		$client = $this->getHTTPClient();
-		$url = ($this->useSSL) ? 'https://' : 'http://';
+		$url = ($this->useSSL) ? 'https://' : 'https://';
 		$url .= self::$api_verify_server;
 		$response = $client->post($url, $postVars);
 
